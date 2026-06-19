@@ -49,7 +49,7 @@ class TimerController:
 
     def __init__(self, bhaptics_mod_instance):
         self.bhaptics_mod = bhaptics_mod_instance
-        self.myTactsuit = bhaptics_mod_instance.myTactsuit
+        self.myTactsuit = bhaptics_mod_instance.suit
 
         # Pistol laser (continuous beam)
         self.pistol_laser_interval = 0.1
