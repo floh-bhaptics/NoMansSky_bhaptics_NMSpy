@@ -67,8 +67,9 @@ class bhaptics_suit:
             else:
                 logger.info("bHaptics SDK initialized")
                 self.connected = True
-                # Heartbeat to confirm the suit is alive
-                await bhaptics_python.play_event("heartbeat")
+                # Heartbeat to confirm the suit is alive — we're already
+                # inside the event loop here, so call directly.
+                bhaptics_python.play_event("heartbeat")
         except Exception as e:
             logger.error(f"Error initializing bHaptics SDK: {e}")
 
@@ -91,9 +92,8 @@ class bhaptics_suit:
             logger.warning(f"play_pattern: intensity {intensity} out of range 0–100")
             return
 
-        asyncio.run_coroutine_threadsafe(
-            bhaptics_python.play_event(pattern_name.lower()),
-            self._loop,
+        self._loop.call_soon_threadsafe(
+            bhaptics_python.play_event, pattern_name.lower()
         )
 
 

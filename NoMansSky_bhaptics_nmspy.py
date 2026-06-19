@@ -103,6 +103,7 @@ class NMSBhapticsMod(Mod):
         self._prev_heat: float = 0.0
         self._heat_last_rise: float = 0.0
         self._ship_weapon_active: bool = False
+        self._pulse_fired: bool = False
 
         # --- connect bHaptics ---
         # bhaptics_suit.__init__ starts a background thread and returns immediately
@@ -292,30 +293,27 @@ class NMSBhapticsMod(Mod):
             pass
 
     # ===================================================================
-    # SPACESHIP — pulse drive (ship-scoped)
+    # SPACESHIP - pulse drive
+    #
+    # UpdatePulseDrive breaks player movement even on foot, so we use
+    # GetPulseDriveFuelFactor instead (ship-scoped and safe).
+    #
+    # Fuel sits at 1.0 at rest. The instant it drops below 0.99 we fire
+    # one haptic burst. The flag resets when fuel recovers to 1.0 so the
+    # next jump triggers again.
     # ===================================================================
 
-    _PULSE_ON = (
-        int(enums.EPulseDriveState.Charge),
-        int(enums.EPulseDriveState.Jumping),
-    )
-
-    @nms.cGcSpaceshipWarp.UpdatePulseDrive.after
-    def on_pulse_drive(self, this, *args):
-        try:
-            warp  = map_struct(get_addressof(this), nms.cGcSpaceshipWarp)
-            state = int(warp.mePulseDriveState)
-        except Exception:
+    @nms.cGcSpaceshipWarp.GetPulseDriveFuelFactor.after
+    def on_pulse_fuel(self, this, _result_):
+        if not self.is_in_spaceship:
             return
-
-        if state in self._PULSE_ON:
-            if not self.timers.spacejump_running:
-                logger.debug("PulseDrive ON")
-                self.timers.start_spacejump()
-        else:
-            if self.timers.spacejump_running:
-                logger.debug("PulseDrive OFF")
-                self.timers.stop_spacejump()
+        fuel = float(_result_)
+        if fuel < 0.99 and not self._pulse_fired:
+            self._pulse_fired = True
+            logger.debug("PulseDrive start")
+            self.suit.play_pattern("SpaceshipPulse")
+        elif fuel >= 1.0:
+            self._pulse_fired = False
 
     # ===================================================================
     # SPACESHIP — weapons / heat (ship-scoped, per-frame but acceptable)
