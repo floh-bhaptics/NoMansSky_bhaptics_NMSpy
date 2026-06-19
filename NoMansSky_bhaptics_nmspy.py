@@ -38,7 +38,6 @@ Haptic patterns used:
   SpaceshipSpeedUp / SpaceshipPulse (looping) / SpaceshipWeaponShoot (looping)
 """
 
-import asyncio
 import ctypes
 import logging
 import time
@@ -106,16 +105,16 @@ class NMSBhapticsMod(Mod):
         self._ship_weapon_active: bool = False
 
         # --- connect bHaptics ---
+        # bhaptics_suit.__init__ starts a background thread and returns immediately
+        # — no sleep, no blocking the game thread.
         logger.info("Initialising bHaptics suit…")
-        time.sleep(5)
         self.suit = bhaptics_suit(
             app_id=BHAPTICS_APP_ID,
             api_key=BHAPTICS_API_KEY,
             app_name=BHAPTICS_APP_NAME,
         )
-        asyncio.run(self.suit.connect())
         self.timers = TimerController(self)
-        logger.info("bHaptics suit ready.")
+        logger.info("bHaptics suit initialised (connecting in background…)")
 
     # ===================================================================
     # PLAYER — death
@@ -152,7 +151,7 @@ class NMSBhapticsMod(Mod):
     @nms.cGcPlayer.GetDominantHand.after
     def on_dominant_hand(self, this, *args, _result_):
         self.player_hand = int(_result_)
-        # logger.debug(f"DominantHand={self.player_hand}")
+        logger.debug(f"DominantHand={self.player_hand}")
 
     # ===================================================================
     # PLAYER — mining laser
