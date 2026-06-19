@@ -47,7 +47,6 @@ from pymhf.core.hooking import function_hook, Structure
 from pymhf.core.memutils import map_struct, get_addressof
 
 import nmspy.data.types as nms
-import nmspy.data.enums as enums
 
 from bhaptics_library import bhaptics_suit, TimerController
 
@@ -133,17 +132,25 @@ class NMSBhapticsMod(Mod):
     @nms.cGcPlayer.TakeDamage.after
     def on_take_damage(self, this, lfDamageAmount, leDamageType, lDamageId,
                        lDir, lpOwner, laEffects):
-        if leDamageType == enums.cGcDamageType.PlayerDamage:
-            logger.debug("FallDamage")
+        # lDamageId is a pointer to a TkID[0x10] struct; str() decodes its
+        # char array to a plain string like "LANDING", "PROJECTILE", etc.
+        try:
+            damage_id = str(lDamageId.contents)
+        except Exception:
+            damage_id = ""
+
+        if damage_id == "LANDING":
+            logger.info("FallDamage")
             self.suit.play_pattern("FallDamage")
             return
+
         try:
             d = lDir.contents
-            pattern = _dir_pattern(d.x, d.z)
+            rotation = _dir_to_rotation(d.x, d.z)
         except Exception:
-            pattern = "DefaultDamage"
-        logger.debug(f"Damage type={leDamageType} pattern={pattern}")
-        self.suit.play_pattern(pattern)
+            rotation = 0.0
+        logger.info(f"Damage id={damage_id} type={leDamageType} rotation={rotation:.0f}deg")
+        self.suit.play_damage("DefaultDamage", rotation)
 
     # ===================================================================
     # PLAYER — dominant hand (called rarely)
@@ -345,14 +352,31 @@ class NMSBhapticsMod(Mod):
 # Directional damage helper
 # ---------------------------------------------------------------------------
 
-def _dir_pattern(dx: float, dz: float) -> str:
+def _dir_to_rotation(dx: float, dz: float) -> float:
+    """
+    Convert an XZ damage-direction vector to a bhaptics rotation in degrees
+    (counterclockwise, 0-360, used as x_offset in play_param).
+
+    lDir points TOWARD the attacker (i.e. away from the player), so:
+      +Z = attacker is in front  -> front of vest (0 deg)
+      -Z = attacker is behind    -> back of vest  (180 deg)
+      +X = attacker is to right  -> right side    (270 deg)
+      -X = attacker is to left   -> left side     (90 deg)
+
+    NMS axes: +X = right, +Z = forward.
+    bhaptics x_offset: counterclockwise, 0 = front, 90 = left,
+                       180 = back, 270 = right.
+
+    Formula: atan2(-nx, nz) gives a CCW angle from front in [-180, 180],
+    mod 360 maps it to [0, 360).
+    """
+    import math
     mag = (dx * dx + dz * dz) ** 0.5
     if mag < 0.1:
-        return "DefaultDamage"
+        return 0.0
     nx, nz = dx / mag, dz / mag
-    if abs(nz) >= abs(nx):
-        return "DamageBack" if nz > 0 else "DamageFront"
-    return "DamageRight" if nx > 0 else "DamageLeft"
+    rotation = math.degrees(math.atan2(-nx, nz)) % 360.0
+    return rotation
 
 
 # ---------------------------------------------------------------------------

@@ -96,6 +96,44 @@ class bhaptics_suit:
             bhaptics_python.play_event, pattern_name.lower()
         )
 
+    def play_damage(self, pattern_name: str, rotation_deg: float):
+        """
+        Play a haptic damage pattern rotated around the body.
+
+        rotation_deg is passed straight to bhaptics play_param as x_offset
+        (counterclockwise, 0-360).  This lets a single 'DefaultDamage' pattern
+        feel like it's coming from the correct direction without needing four
+        separate vest patterns.
+
+        Mapping from damage direction vector to degrees:
+          Front  ->   0  (hit from the front, pattern on chest)
+          Right  ->  90  (hit from the right, pattern on left side)
+          Back   -> 180  (hit from behind, pattern on back)
+          Left   -> 270  (hit from the left, pattern on right side)
+        """
+        if not self.connected:
+            return
+        if not isinstance(pattern_name, str):
+            return
+        self._loop.call_soon_threadsafe(
+            self._play_param_sync,
+            pattern_name.lower(),
+            rotation_deg,
+        )
+
+    def _play_param_sync(self, pattern_name: str, rotation_deg: float):
+        """Called on the event loop thread — schedules the async play_param call."""
+        asyncio.run_coroutine_threadsafe(
+            bhaptics_python.play_param(
+                pattern_name,
+                1.0,   # intensity multiplier (1.0 = normal)
+                1.0,   # duration multiplier  (1.0 = normal)
+                rotation_deg,
+                0.0,   # y_offset: no vertical shift
+            ),
+            self._loop,
+        )
+
 
 class TimerController:
     """
