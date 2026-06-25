@@ -66,6 +66,7 @@ SHIP_ACCEL_THRESHOLD_SQ    = 2500   # speed-sq delta to trigger SpaceshipSpeedUp
 SHIP_WEAPON_HEAT_THRESHOLD = 0.02   # heat-factor rise per frame = "firing"
 SHIP_WEAPON_COOLDOWN       = 0.35   # seconds of no heat rise before loop stops
 LASER_BEAM_COOLDOWN        = 0.25   # seconds of no Fire call before beam is "off"
+PLAYER_WEAPON_HEAT_THRESHOLD = 0.05  # mfHeatTime rise per Update tick = "shot fired" 
 
 # ---------------------------------------------------------------------------
 # cGcNetworkWeapon — not yet in NMS.py, define locally with raw byte pattern
@@ -103,6 +104,13 @@ class NMSBhapticsMod(Mod):
         self._heat_last_rise: float = 0.0
         self._ship_weapon_active: bool = False
         self._pulse_fired: bool = False
+
+        # multitool projectile fire detection
+        self._prev_weapon_heat: float = 0.0
+        self._player_weapon_fired: bool = False
+
+        # scanner
+        self._scan_active: bool = False
 
         # --- connect bHaptics ---
         # bhaptics_suit.__init__ starts a background thread and returns immediately
@@ -181,13 +189,34 @@ class NMSBhapticsMod(Mod):
 
     @nms.cGcPlayerWeapon.Update.after
     def on_weapon_update(self, this, lfTimeStep):
-        # Fast exit when laser is not firing — this hook becomes a no-op.
-        if not self._laser_active:
+        # --- laser off-edge detection ---
+        if self._laser_active:
+            if time.perf_counter() - self._laser_last_fire > LASER_BEAM_COOLDOWN:
+                self._laser_active = False
+                logger.debug("Laser OFF")
+                self.timers.stop_pistol_laser()
+
+        # --- projectile / scatter / pulse weapon fire detection ---
+        # Skip while mining laser is active or when in spaceship.
+        if self._laser_active or self.is_in_spaceship:
             return
-        if time.perf_counter() - self._laser_last_fire > LASER_BEAM_COOLDOWN:
-            self._laser_active = False
-            logger.debug("Laser OFF")
-            self.timers.stop_pistol_laser()
+        try:
+            weapon = map_struct(get_addressof(this), nms.cGcPlayerWeapon)
+            heat = float(weapon.mfHeatTime)
+        except Exception:
+            return
+        delta = heat - self._prev_weapon_heat
+        self._prev_weapon_heat = heat
+        if delta > PLAYER_WEAPON_HEAT_THRESHOLD and not self._player_weapon_fired:
+            self._player_weapon_fired = True
+            if self.player_hand == 0:
+                logger.debug("RightHandPistolShoot")
+                self.suit.play_pattern("RightHandPistolShoot")
+            else:
+                logger.debug("LeftHandPistolShoot")
+                self.suit.play_pattern("LeftHandPistolShoot")
+        elif heat < 0.01:
+            self._player_weapon_fired = False
 
     # ===================================================================
     # PLAYER — scanning
@@ -198,30 +227,29 @@ class NMSBhapticsMod(Mod):
 
     @nms.cGcBinoculars.UpdateScanBarProgress.after
     def on_scan_progress(self, this, lfScanProgress):
-        if not self.timers.scan_running:
+        # Play once when scan starts, not on every frame tick.
+        # UpdateScanBarProgress is called each frame while scanning, so we
+        # guard with a flag that resets when the scan ends.
+        if not self._scan_active:
+            self._scan_active = True
             logger.debug("Scan started")
-            self.timers.start_scan()
+            self.suit.play_pattern("Scanning")
 
     @nms.cGcBinoculars.UpdateRayCasts.after
     def on_scan_end(self, this, *args):
-        if self.timers.scan_running:
-            logger.debug("Scan ended")
-            self.timers.stop_scan()
+        self._scan_active = False
+        logger.debug("Scan ended")
 
     # ===================================================================
-    # PLAYER — single-shot pistol
+    # PLAYER — multitool projectile weapons (all modes)
+    #
+    # cGcNetworkWeapon.FireRemote only matches boltcaster/laser.
+    # Instead we read mfHeatTime from cGcPlayerWeapon in its Update hook
+    # (which already runs for laser-off detection) — a heat spike above
+    # a threshold means a shot was just fired, regardless of weapon mode.
+    # We ignore this while the mining laser is active (handled separately).
     # ===================================================================
-
-    @cGcNetworkWeapon.FireRemote.after
-    def on_fire_remote(self, this, *args):
-        if self._laser_active or self.is_in_spaceship:
-            return
-        if self.player_hand == 0:
-            logger.debug("RightHandPistolShoot")
-            self.suit.play_pattern("RightHandPistolShoot")
-        else:
-            logger.debug("LeftHandPistolShoot")
-            self.suit.play_pattern("LeftHandPistolShoot")
+    # (projectile fire detection is integrated into on_weapon_update below)
 
     # ===================================================================
     # PLAYER — item collection
@@ -261,6 +289,10 @@ class NMSBhapticsMod(Mod):
     _LANDED     = 3
     _TAKING_OFF = 10
 
+    # cGcMissionConditionShipEngineStatus values we care about:
+    _SHIP_BOOSTING  = 4
+    _SHIP_PULSING   = 5   # pulse jump (different from pulse drive)
+
     @nms.cGcSpaceshipComponent.Update.after
     def on_ship_update(self, this, lfTimeStep):
         try:
@@ -279,6 +311,12 @@ class NMSBhapticsMod(Mod):
         elif state == self._TAKING_OFF and prev == self._LANDED:
             logger.debug("SpaceshipTakeOff")
             self.suit.play_pattern("SpaceshipTakeOff")
+        elif state == self._SHIP_BOOSTING and prev != self._SHIP_BOOSTING:
+            logger.debug("SpaceshipBoost")
+            self.suit.play_pattern("SpaceshipBoost")
+        elif state == self._SHIP_PULSING and prev != self._SHIP_PULSING:
+            logger.debug("SpaceshipPulseJump")
+            self.suit.play_pattern("SpaceshipPulseJump")
 
     # ===================================================================
     # SPACESHIP — acceleration (ship-scoped, runs only while piloting)
@@ -323,29 +361,29 @@ class NMSBhapticsMod(Mod):
             self._pulse_fired = False
 
     # ===================================================================
-    # SPACESHIP — weapons / heat (ship-scoped, per-frame but acceptable)
+    # SPACESHIP — weapons
+    #
+    # GetHeatFactor is called every frame while in a ship.
+    # We detect the rising edge (heat increases) and play one burst.
+    # A cooldown flag prevents re-triggering until heat settles back down,
+    # which avoids both the stuttering loop and the never-stops problem.
     # ===================================================================
 
     @nms.cGcSpaceshipWeapons.GetHeatFactor.after
     def on_ship_heat(self, this, _result_):
         if not self.is_in_spaceship:
             return
-        now   = time.perf_counter()
         heat  = float(_result_)
         delta = heat - self._prev_heat
         self._prev_heat = heat
 
-        if delta > SHIP_WEAPON_HEAT_THRESHOLD:
-            self._heat_last_rise = now
-            if not self._ship_weapon_active:
-                self._ship_weapon_active = True
-                logger.debug("ShipWeapons ON")
-                self.timers.start_ship_weapons()
-        elif self._ship_weapon_active:
-            if now - self._heat_last_rise > SHIP_WEAPON_COOLDOWN:
-                self._ship_weapon_active = False
-                logger.debug("ShipWeapons OFF")
-                self.timers.stop_ship_weapons()
+        if delta > SHIP_WEAPON_HEAT_THRESHOLD and not self._ship_weapon_active:
+            self._ship_weapon_active = True
+            logger.debug("ShipWeapons fired")
+            self.suit.play_pattern("SpaceshipWeaponShoot")
+        elif heat < 0.01:
+            # Heat fully dissipated — ready to fire again
+            self._ship_weapon_active = False
 
 
 # ---------------------------------------------------------------------------
