@@ -19,8 +19,43 @@ weapons, landing, pulse drive, and more — all on your bHaptics vest.
 
 ## Installation
 
+### ⚠️ Antivirus notice — please read first
+
+This mod works by injecting Python code into the running No Man's Sky
+process so it can read game state and react to in-game events. This is
+the same technique used by many other game mods and tools — but it is
+also the same technique used by some malware. Because of this, antivirus
+software (including Windows Defender) may flag the mod, block it from
+running, or silently delete files without warning.
+
+**The mod is safe**, but you will likely need to tell your antivirus to
+leave it alone. The easiest way to do this is to add the folder where you
+unzipped the mod to your antivirus's **exclusion list** (sometimes called
+a whitelist). This tells the antivirus "I trust everything in this folder,
+don't touch it."
+
+**How to add an exclusion in Windows Defender:**
+
+1. Open the **Start menu** and search for **"Windows Security"**, then open it
+2. Click **"Virus & threat protection"**
+3. Scroll down and click **"Manage settings"** under *Virus & threat protection settings*
+4. Scroll down to **"Exclusions"** and click **"Add or remove exclusions"**
+5. Click **"Add an exclusion"** → choose **"Folder"**
+6. Navigate to the folder where you unzipped the mod (e.g. `C:\NMS_bhaptics\`) and click **"Select Folder"**
+
+If you use a different antivirus, look for "exclusions", "exceptions", or
+"whitelist" in its settings — every major antivirus has this feature.
+
+> 💡 **Tip:** If the mod installs fine but then stops working, or if
+> `02 Launch.bat` closes immediately with no error, a silent antivirus
+> block is the most likely cause. Check your antivirus quarantine log for
+> deleted files and re-add the exclusion if needed.
+
+---
+
 1. Download the [latest release](https://github.com/floh-bhaptics/NoMansSky_bhaptics_NMSpy/releases/latest/download/NoMansSky_bhaptics_NMSpy.zip) and unzip it anywhere you like (e.g. `C:\NMS_bhaptics\`)
-2. Double-click **`01 Setup.bat`** — this creates a virtual environment and
+2. Add the unzipped folder to your antivirus exclusion list (see above)
+3. Double-click **`01 Setup.bat`** — this creates a virtual environment and
    installs all required packages. Takes about a minute, only needed once.
 
 ---
