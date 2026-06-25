@@ -19,8 +19,8 @@ weapons, landing, pulse drive, and more — all on your bHaptics vest.
 
 ## Installation
 
-1. Unzip this folder anywhere you like (e.g. `C:\NMS_bhaptics\`)
-2. Double-click **`setup.bat`** — this creates a virtual environment and
+1. Download the [latest release](https://github.com/floh-bhaptics/NoMansSky_bhaptics_NMSpy/releases/latest/download/NoMansSky_bhaptics_NMSpy.zip) and unzip it anywhere you like (e.g. `C:\NMS_bhaptics\`)
+2. Double-click **`01 Setup.bat`** — this creates a virtual environment and
    installs all required packages. Takes about a minute, only needed once.
 
 ---
@@ -28,21 +28,39 @@ weapons, landing, pulse drive, and more — all on your bHaptics vest.
 ## Launching the mod
 
 1. Start **bHaptics Player** first
-2. Double-click **`Launch.bat`**
+2. Double-click **`02 Launch.bat`**
 3. No Man's Sky will start automatically with the mod injected
+
+### Playing in VR
+
+Because the mod launches the game instead of Steam, VR mode cannot be
+toggled from the Steam interface while the mod is running. To play in VR,
+add `-HmdEnable 1` to No Man's Sky's Steam launch parameters **once** and
+leave it there — it will then apply every time the game starts, whether
+launched via Steam or via the mod.
+
+To set it: right-click **No Man's Sky** in your Steam library →
+**Properties** → **General** → paste `-HmdEnable 1` into the
+**Launch Options** field.
 
 ---
 
 ## Updating
 
-To get the latest version of the underlying NMS.py library:
+No Man's Sky receives frequent updates, and these can break the hooks the
+mod uses to detect in-game events. Most of the time this is fixed within
+a few days by an update to the underlying NMS.py library. If the mod stops
+working after a No Man's Sky update, wait a few days and then run
+**`03 Update.bat`** — that is exactly what it is there for.
 
-- Double-click **`Update.bat`**
+To update the NMS.py library and bHaptics packages:
+
+- Double-click **`03 Update.bat`**
 
 To update the mod itself (new `.py` files from a new release):
 
 - Replace `NoMansSky_bhaptics_nmspy.py` and `bhaptics_library.py` with
-  the new versions, then run **`Update.bat`**
+  the new versions from the release, then run **`03 Update.bat`**
 
 ---
 
@@ -79,15 +97,20 @@ The mod plays the following pattern names from your bHaptics project:
 **The mod doesn't start / Python not found**
 → Install Python 3.9–3.11 from python.org and tick "Add Python to PATH"
 
-**setup.bat fails with "Incompatible Python version"**
+**`01 Setup.bat` fails with "Incompatible Python version"**
 → You have Python 3.12+. Install 3.11 from python.org alongside it.
-   If both are installed, `setup.bat` will use whichever `python` points
+   If both are installed, `01 Setup.bat` will use whichever `python` points
    to — you may need to temporarily adjust your PATH or call the 3.11
    executable directly: `py -3.11 -m venv venv`
 
 **Game launches but no haptics**
 → Make sure bHaptics Player is running *before* launching the mod.
    Check the `pymhf-*.log` file in this folder for error messages.
+
+**The mod stopped working after a No Man's Sky update**
+→ This is expected. Run **`03 Update.bat`** and try again. If it is still
+   broken, the NMS.py library may not have caught up yet — check back in
+   a few days.
 
 **Game feels sluggish or movement is broken**
 → This usually means a hook is conflicting. Check the log for
