@@ -265,34 +265,113 @@ class NMSBhapticsMod(Mod):
     # ===================================================================
     # WORLD INTERACTIONS — DoInteractionEvent
     #
-    # Fires whenever the player completes a world interaction (NPC
-    # dialogue, terminal, shop, etc.).  leEvent is a raw uint32 because
-    # eInteractionEvent is not yet mapped in NMS.py.
+    # Fires whenever the player triggers a world interaction (NPC,
+    # terminal, shop, portal, etc.).  leEvent maps to cGcInteractionType
+    # from nmspy/data/enums/external_enums.py — it describes the TYPE of
+    # the interactable object.
     #
-    # All observed values are logged at INFO level so you can discover
-    # new ones in-game.  Known/guessed values are mapped to named
-    # patterns below; everything else falls back to "InteractionEvent".
+    # The DoInteractionEvent signature currently types leEvent as a plain
+    # c_uint32; once monkeyman192 updates it to c_enum32[cGcInteractionType]
+    # we can use nmse.cGcInteractionType directly here.
     #
-    # To identify a new value: trigger the interaction, note the integer
-    # in the log, then add it to _INTERACTION_PATTERNS below.
+    # Unmapped values fall back to "InteractionEvent" and are logged at
+    # INFO level so you can discover and add them.
     # ===================================================================
 
-    # Maps raw eInteractionEvent uint32 values to bhaptics pattern names.
-    # Values marked (UNVERIFIED) are community best-guesses; confirm in-game.
+    # Maps cGcInteractionType uint32 values to bhaptics pattern names.
+    # Values are from nmspy/data/enums/external_enums.py cGcInteractionType —
+    # these are the type of the interactable object, not abstract event stages.
+    # All unmapped values fall back to "InteractionEvent" and are logged so
+    # you can discover and add them.
     _INTERACTION_PATTERNS: dict = {
-        0:  "InteractionGreeting",       # greeting / initial contact   (UNVERIFIED)
-        1:  "InteractionDialogue",       # NPC dialogue line            (UNVERIFIED)
-        2:  "InteractionAccept",         # accept / confirm choice      (UNVERIFIED)
-        3:  "InteractionReward",         # reward given                 (UNVERIFIED)
-        4:  "InteractionDecline",        # decline / back out           (UNVERIFIED)
-        5:  "InteractionShop",           # open shop                    (UNVERIFIED)
-        6:  "InteractionMission",        # mission accept / complete    (UNVERIFIED)
-        7:  "InteractionTerminal",       # activate terminal / station  (UNVERIFIED)
-        8:  "InteractionScan",           # scan / analyse object        (UNVERIFIED)
-        9:  "InteractionCraft",          # craft item                   (UNVERIFIED)
-        10: "InteractionInstall",        # install technology           (UNVERIFIED)
-        11: "InteractionRepair",         # repair item                  (UNVERIFIED)
-        12: "InteractionRefuel",         # refuel / recharge            (UNVERIFIED)
+        0x01: "InteractionShop",              # Shop (general)
+        0x02: "InteractionNPC",               # NPC
+        0x03: "InteractionNPC",               # NPC_Secondary
+        0x04: "InteractionNPC",               # NPC_Anomaly (Anomaly NPCs)
+        0x05: "InteractionNPC",               # NPC_Anomaly_Secondary
+        0x06: "InteractionShip",              # Ship
+        0x07: "InteractionTerminal",          # Outpost
+        0x08: "InteractionTerminal",          # SpaceStation
+        0x09: "InteractionTerminal",          # RadioTower
+        0x0A: "InteractionMonolith",          # Monolith
+        0x0B: "InteractionTerminal",          # Factory
+        0x0C: "InteractionTerminal",          # AbandonedShip
+        0x0D: "InteractionTerminal",          # Harvester
+        0x0E: "InteractionTerminal",          # Observatory
+        0x0F: "InteractionTerminal",          # TradingPost
+        0x10: "InteractionTerminal",          # DistressBeacon
+        0x11: "InteractionPortal",            # Portal
+        0x12: "InteractionMonolith",          # Plaque
+        0x13: "InteractionTerminal",          # AtlasStation
+        0x14: "InteractionTerminal",          # AbandonedBuildings
+        0x15: "InteractionTerminal",          # WeaponTerminal
+        0x16: "InteractionTerminal",          # SuitTerminal
+        0x17: "InteractionTerminal",          # SignalScanner
+        0x18: "InteractionTeleporter",        # Teleporter_Base
+        0x19: "InteractionTeleporter",        # Teleporter_Station
+        0x1A: "InteractionTerminal",          # ClaimBase
+        0x1B: "InteractionNPC",               # NPC_Freighter_Captain
+        0x1C: "InteractionNPC",               # NPC_HIRE_Weapons
+        0x1D: "InteractionNPC",               # NPC_HIRE_Weapons_Wait
+        0x1E: "InteractionNPC",               # NPC_HIRE_Farmer
+        0x1F: "InteractionNPC",               # NPC_HIRE_Farmer_Wait
+        0x20: "InteractionNPC",               # NPC_HIRE_Builder
+        0x21: "InteractionNPC",               # NPC_HIRE_Builder_Wait
+        0x22: "InteractionNPC",               # NPC_HIRE_Vehicles
+        0x23: "InteractionNPC",               # NPC_HIRE_Vehicles_Wait
+        0x24: "InteractionTerminal",          # MessageBeacon
+        0x25: "InteractionNPC",               # NPC_HIRE_Scientist
+        0x26: "InteractionNPC",               # NPC_HIRE_Scientist_Wait
+        0x27: "InteractionNPC",               # NPC_Recruit
+        0x28: "InteractionNPC",               # NPC_Freighter_Captain_Secondary
+        0x29: "InteractionNPC",               # NPC_Recruit_Secondary
+        0x2A: "InteractionShip",              # Vehicle (Exocraft)
+        0x2B: "InteractionTerminal",          # MessageModule
+        0x2C: "InteractionShop",              # TechShop
+        0x2D: "InteractionTerminal",          # VehicleRaceStart
+        0x2E: "InteractionShop",              # BuildingShop
+        0x2F: "InteractionMission",           # MissionGiver
+        0x30: "InteractionNPC",               # HoloHub
+        0x31: "InteractionNPC",               # HoloExplorer
+        0x32: "InteractionNPC",               # HoloSceptic
+        0x33: "InteractionNPC",               # HoloNoone
+        0x34: "InteractionPortal",            # PortalRuneEntry
+        0x35: "InteractionPortal",            # PortalActivate
+        0x36: "InteractionTerminal",          # CrashedFreighter
+        0x37: "InteractionTerminal",          # GraveInCave
+        0x38: "InteractionTerminal",          # GlitchyStoryBox
+        0x39: "InteractionNPC",               # NetworkPlayer
+        0x3A: "InteractionTerminal",          # NetworkMonument
+        0x3B: "InteractionTerminal",          # AnomalyComputer
+        0x3C: "InteractionMonolith",          # AtlasPlinth
+        0x3D: "InteractionTerminal",          # Epilogue
+        0x3E: "InteractionNPC",               # GuildEnvoy
+        0x3F: "InteractionTerminal",          # ManageFleet
+        0x40: "InteractionTerminal",          # ManageExpeditions
+        0x41: "InteractionNPC",               # Frigate
+        0x42: "InteractionTerminal",          # CustomiseCharacter
+        0x43: "InteractionTerminal",          # CustomiseShip
+        0x44: "InteractionTerminal",          # CustomiseWeapon
+        0x45: "InteractionTerminal",          # CustomiseVehicle
+        0x46: "InteractionTerminal",          # ClaimBaseAnywhere
+        0x47: "InteractionTerminal",          # FleetNavigator
+        0x48: "InteractionTerminal",          # FleetCommandPost
+        0x49: "InteractionTerminal",          # StoryUtility
+        0x4A: "InteractionMission",           # MPMissionGiver
+        0x4B: "InteractionShop",              # SpecialsShop
+        0x4C: "InteractionTerminal",          # WaterRuin
+        0x4D: "InteractionTerminal",          # LocationScanner
+        0x4E: "InteractionTerminal",          # ByteBeat
+        0x4F: "InteractionNPC",               # NPC_CrashSite
+        0x50: "InteractionNPC",               # NPC_Scavenger
+        0x51: "InteractionTerminal",          # BaseGridPart
+        0x52: "InteractionNPC",               # NPC_Freighter_Crew
+        0x53: "InteractionNPC",               # NPC_Freighter_Crew_Owned
+        0x54: "InteractionTerminal",          # AbandonedShip_With_NPC
+        0x55: "InteractionNPC",               # ShipPilot
+        0x56: "InteractionMission",           # NexusMilestones
+        0x57: "InteractionMission",           # NexusDailyMission
+        0x58: "InteractionTerminal",          # CreatureFeeder
     }
 
     @nms.cGcInteractionComponent.DoInteractionEvent.after
