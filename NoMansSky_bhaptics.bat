@@ -1,1 +1,0 @@
-.\env\Scripts\pymhf.exe run NoMansSky_bhaptics_nmspy.py
