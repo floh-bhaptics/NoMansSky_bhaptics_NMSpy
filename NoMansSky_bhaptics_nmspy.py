@@ -264,6 +264,46 @@ class NMSBhapticsMod(Mod):
             self.suit.play_pattern("CollectItem")
 
     # ===================================================================
+    # WORLD INTERACTIONS — DoInteractionEvent
+    #
+    # Fires whenever the player completes a world interaction (NPC
+    # dialogue, terminal, shop, etc.).  leEvent is a raw uint32 because
+    # eInteractionEvent is not yet mapped in NMS.py.
+    #
+    # All observed values are logged at INFO level so you can discover
+    # new ones in-game.  Known/guessed values are mapped to named
+    # patterns below; everything else falls back to "InteractionEvent".
+    #
+    # To identify a new value: trigger the interaction, note the integer
+    # in the log, then add it to _INTERACTION_PATTERNS below.
+    # ===================================================================
+
+    # Maps raw eInteractionEvent uint32 values to bhaptics pattern names.
+    # Values marked (UNVERIFIED) are community best-guesses; confirm in-game.
+    _INTERACTION_PATTERNS: dict = {
+        0:  "InteractionGreeting",       # greeting / initial contact   (UNVERIFIED)
+        1:  "InteractionDialogue",       # NPC dialogue line            (UNVERIFIED)
+        2:  "InteractionAccept",         # accept / confirm choice      (UNVERIFIED)
+        3:  "InteractionReward",         # reward given                 (UNVERIFIED)
+        4:  "InteractionDecline",        # decline / back out           (UNVERIFIED)
+        5:  "InteractionShop",           # open shop                    (UNVERIFIED)
+        6:  "InteractionMission",        # mission accept / complete    (UNVERIFIED)
+        7:  "InteractionTerminal",       # activate terminal / station  (UNVERIFIED)
+        8:  "InteractionScan",           # scan / analyse object        (UNVERIFIED)
+        9:  "InteractionCraft",          # craft item                   (UNVERIFIED)
+        10: "InteractionInstall",        # install technology           (UNVERIFIED)
+        11: "InteractionRepair",         # repair item                  (UNVERIFIED)
+        12: "InteractionRefuel",         # refuel / recharge            (UNVERIFIED)
+    }
+
+    @nms.cGcInteractionComponent.DoInteractionEvent.after
+    def on_interaction_event(self, this, leEvent):
+        event_id = int(leEvent)
+        pattern = self._INTERACTION_PATTERNS.get(event_id, "InteractionEvent")
+        logger.info(f"InteractionEvent id={event_id} -> {pattern}")
+        self.suit.play_pattern(pattern)
+
+    # ===================================================================
     # SPACESHIP — cockpit entry / exit
     # ===================================================================
 
