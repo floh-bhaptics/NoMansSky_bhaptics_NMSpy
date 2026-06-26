@@ -183,6 +183,8 @@ class NMSBhapticsMod(Mod):
 
     @nms.cGcLaserBeam.Fire.after
     def on_laser_fire(self, this, lbHitOnFirstFrame):
+        if self.is_in_spaceship:
+            return
         self._laser_last_fire = time.perf_counter()
         if not self._laser_active:
             self._laser_active = True
@@ -379,7 +381,6 @@ class NMSBhapticsMod(Mod):
     def on_eject(self, this, *args):
         logger.debug("GetOffSpaceship")
         self.is_in_spaceship = False
-        self.timers.stop_ship_weapons()
         self.timers.stop_spacejump()
         self._ship_weapon_active = False
         self.suit.play_pattern("GetOffSpaceship")
