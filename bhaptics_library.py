@@ -122,16 +122,13 @@ class bhaptics_suit:
         )
 
     def _play_param_sync(self, pattern_name: str, rotation_deg: float):
-        """Called on the event loop thread — schedules the async play_param call."""
-        asyncio.run_coroutine_threadsafe(
-            bhaptics_python.play_param(
-                pattern_name,
-                1.0,   # intensity multiplier (1.0 = normal)
-                1.0,   # duration multiplier  (1.0 = normal)
-                rotation_deg,
-                0.0,   # y_offset: no vertical shift
-            ),
-            self._loop,
+        """Called on the event loop thread — calls play_param directly."""
+        bhaptics_python.play_param(
+            pattern_name,
+            1.0,   # intensity multiplier (1.0 = normal)
+            1.0,   # duration multiplier  (1.0 = normal)
+            rotation_deg,
+            0.0,   # y_offset: no vertical shift
         )
 
 
