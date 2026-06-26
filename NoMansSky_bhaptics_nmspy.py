@@ -40,13 +40,15 @@ Haptic patterns used:
 
 import ctypes
 import logging
+import math
 import time
+from ctypes import _Pointer
 
 from pymhf import Mod
 from pymhf.core.hooking import function_hook, Structure
-from pymhf.core.memutils import map_struct, get_addressof
 
 import nmspy.data.types as nms
+import nmspy.data.enums as nmse
 
 from bhaptics_library import bhaptics_suit, TimerController
 
@@ -198,13 +200,10 @@ class NMSBhapticsMod(Mod):
 
         # --- projectile / scatter / pulse weapon fire detection ---
         # Skip while mining laser is active or when in spaceship.
-        if self._laser_active or self.is_in_spaceship:
+        if self._laser_active or self.is_in_spaceship or not this:
             return
-        try:
-            weapon = map_struct(get_addressof(this), nms.cGcPlayerWeapon)
-            heat = float(weapon.mfHeatTime)
-        except Exception:
-            return
+        weapon = this.contents
+        heat = float(weapon.mfHeatTime)
         delta = heat - self._prev_weapon_heat
         self._prev_weapon_heat = heat
         if delta > PLAYER_WEAPON_HEAT_THRESHOLD and not self._player_weapon_fired:
@@ -334,12 +333,11 @@ class NMSBhapticsMod(Mod):
     _SHIP_PULSING   = 5   # pulse jump (different from pulse drive)
 
     @nms.cGcSpaceshipComponent.Update.after
-    def on_ship_update(self, this, lfTimeStep):
-        try:
-            ship  = map_struct(get_addressof(this), nms.cGcSpaceshipComponent)
-            state = int(ship.meLandState)
-        except Exception:
+    def on_ship_update(self, this: _Pointer[nms.cGcSpaceshipComponent], lfTimeStep):
+        if not this:
             return
+        ship  = this.contents
+        state = int(ship.meLandState)
 
         if state == self._last_land_state:
             return
@@ -363,19 +361,16 @@ class NMSBhapticsMod(Mod):
     # ===================================================================
 
     @nms.cGcSpaceshipComponent.GetVelocity.after
-    def on_get_velocity(self, this, result, *args):
-        if not self.is_in_spaceship:
+    def on_get_velocity(self, this: _Pointer[nms.cGcSpaceshipComponent], result, *args):
+        if not self.is_in_spaceship or not result:
             return
-        try:
-            v     = result.contents
-            sq    = v.x * v.x + v.y * v.y + v.z * v.z
-            delta = sq - self._prev_velocity_sq
-            self._prev_velocity_sq = sq
-            if delta > SHIP_ACCEL_THRESHOLD_SQ:
-                logger.debug("SpaceshipSpeedUp")
-                self.suit.play_pattern("SpaceshipSpeedUp")
-        except Exception:
-            pass
+        v     = result.contents
+        sq    = v.x * v.x + v.y * v.y + v.z * v.z
+        delta = sq - self._prev_velocity_sq
+        self._prev_velocity_sq = sq
+        if delta > SHIP_ACCEL_THRESHOLD_SQ:
+            logger.debug("SpaceshipSpeedUp")
+            self.suit.play_pattern("SpaceshipSpeedUp")
 
     # ===================================================================
     # SPACESHIP - pulse drive
@@ -448,7 +443,6 @@ def _dir_to_rotation(dx: float, dz: float) -> float:
     Formula: atan2(-nx, nz) gives a CCW angle from front in [-180, 180],
     mod 360 maps it to [0, 360).
     """
-    import math
     mag = (dx * dx + dz * dz) ** 0.5
     if mag < 0.1:
         return 0.0
