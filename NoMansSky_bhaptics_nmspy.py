@@ -59,7 +59,7 @@ logger = logging.getLogger("NMS_bhaptics")
 # ---------------------------------------------------------------------------
 BHAPTICS_APP_ID   = "693ac4ffa277918a719a1bd8"
 BHAPTICS_API_KEY  = "uSEDPxsVOpRefEGM7FAc"
-BHAPTICS_APP_NAME = "No Mans Sky"
+BHAPTICS_APP_NAME = ""
 
 # ---------------------------------------------------------------------------
 # Tunables
