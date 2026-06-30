@@ -67,6 +67,7 @@ BHAPTICS_DEFAULT_PATTERNS = ""
 SHIP_ACCEL_THRESHOLD_SQ    = 2500   # speed-sq delta to trigger SpaceshipSpeedUp
 SHIP_WEAPON_HEAT_THRESHOLD = 0.02   # heat-factor rise per frame = "firing"
 SHIP_WEAPON_COOLDOWN       = 0.35   # seconds of no heat rise before loop stops
+SHIP_FIRE_DEBOUNCE         = 0.10   # min seconds between separate fire-burst haptics
 LASER_BEAM_COOLDOWN        = 0.25   # seconds of no Fire call before beam is "off"
 PLAYER_WEAPON_HEAT_THRESHOLD = 0.05  # mfHeatTime rise per Update tick = "shot fired" 
 
@@ -104,7 +105,7 @@ class NMSBhapticsMod(Mod):
         self._prev_velocity_sq: float = 0.0
         self._prev_heat: float = 0.0
         self._heat_last_rise: float = 0.0
-        self._ship_weapon_active: bool = False
+        self._ship_fire_last_trigger: float = 0.0
         self._pulse_fired: bool = False
 
         # multitool projectile fire detection
@@ -113,6 +114,9 @@ class NMSBhapticsMod(Mod):
 
         # scanner
         self._scan_active: bool = False
+
+        # world interactions
+        self._last_interaction_event: int = -1
 
         # --- connect bHaptics ---
         # bhaptics_suit.__init__ starts a background thread and returns immediately
@@ -374,9 +378,28 @@ class NMSBhapticsMod(Mod):
         0x58: "InteractionTerminal",
     }
 
+    # NOTE: this currently fires while the player is merely gazing at an
+    # interactable, not specifically when they press the interact button.
+    # Our working theory (consistent with the values mapped above) is that
+    # leEvent reports the TYPE of whatever is under the crosshair, and the
+    # function gets called repeatedly while it stays in focus — not a
+    # distinct "gaze" vs "confirm" event code.
+    #
+    # The debounce below stops the repeated buzz while continuously
+    # looking at the same object, firing once per newly-focused target.
+    # It does NOT yet distinguish "looking at" from "actually interacting".
+    #
+    # To look for a genuine "confirm pressed" signal: with debug logging
+    # on, gaze at a few different objects without pressing anything (note
+    # the ids logged), then walk up and actually press the interact
+    # button — if a NEW id appears that wasn't already tied to a specific
+    # object type, that may be the real confirm signal to filter for.
     @nms.cGcInteractionComponent.DoInteractionEvent.after
     def on_interaction_event(self, this, leEvent):
         event_id = int(leEvent)
+        if event_id == self._last_interaction_event:
+            return  # still gazing at the same target — suppress repeat
+        self._last_interaction_event = event_id
         pattern = self._INTERACTION_PATTERNS.get(event_id, "InteractionEvent")
         logger.debug(f"InteractionEvent id={event_id} -> {pattern}")
         self.suit.play_pattern(pattern)
@@ -396,7 +419,6 @@ class NMSBhapticsMod(Mod):
         logger.debug("GetOffSpaceship")
         self.is_in_spaceship = False
         self.timers.stop_spacejump()
-        self._ship_weapon_active = False
         self.suit.play_pattern("GetOffSpaceship")
 
     # ===================================================================
@@ -408,7 +430,7 @@ class NMSBhapticsMod(Mod):
 
     # cGcMissionConditionShipEngineStatus values we care about:
     _SHIP_BOOSTING  = 4
-    _SHIP_PULSING   = 5   # pulse jump (different from pulse drive)
+    _SHIP_PULSING   = 5
 
     @nms.cGcSpaceshipComponent.Update.after
     def on_ship_update(self, this: _Pointer[nms.cGcSpaceshipComponent], lfTimeStep):
@@ -431,8 +453,17 @@ class NMSBhapticsMod(Mod):
             logger.debug("SpaceshipBoost")
             self.suit.play_pattern("SpaceshipBoost")
         elif state == self._SHIP_PULSING and prev != self._SHIP_PULSING:
-            logger.debug("SpaceshipPulseJump")
-            self.suit.play_pattern("SpaceshipPulseJump")
+            # This transition (Update.after, the same safe hook used for
+            # land state — NOT UpdatePulseDrive) appears to fire right as
+            # the pulse drive engages. Earlier we assumed "pulse jump" was
+            # a distinct mechanic from "pulse drive", but in NMS these are
+            # colloquially the same thing — reusing the SpaceshipPulse
+            # pattern here means it doubles as our "start" trigger,
+            # complementing the existing GetPulseDriveFuelFactor-based
+            # "stop" trigger below, with no risk of the movement-breaking
+            # issue UpdatePulseDrive caused.
+            logger.debug("PulseDrive start (via engine status)")
+            self.suit.play_pattern("SpaceshipPulse")
 
     # ===================================================================
     # SPACESHIP — acceleration (ship-scoped, runs only while piloting)
@@ -451,10 +482,15 @@ class NMSBhapticsMod(Mod):
             self.suit.play_pattern("SpaceshipSpeedUp")
 
     # ===================================================================
-    # SPACESHIP - pulse drive
+    # SPACESHIP - pulse drive (stop trigger)
     #
-    # UpdatePulseDrive breaks player movement even on foot, so we use
-    # GetPulseDriveFuelFactor instead (ship-scoped and safe).
+    # UpdatePulseDrive breaks player movement even on foot (confirmed by
+    # direct testing), so it is never hooked. GetPulseDriveFuelFactor is
+    # safe, but testing showed it fires once near the END of a pulse
+    # jump rather than the start (likely only called while the HUD fuel
+    # bar is being shown during recovery) — so this is kept as the STOP
+    # trigger. The START trigger lives in on_ship_update above, using the
+    # _SHIP_PULSING engine-status transition instead.
     #
     # Fuel sits at 1.0 at rest. The instant it drops below 0.99 we fire
     # one haptic burst. The flag resets when fuel recovers to 1.0 so the
@@ -468,7 +504,7 @@ class NMSBhapticsMod(Mod):
         fuel = float(_result_)
         if fuel < 0.99 and not self._pulse_fired:
             self._pulse_fired = True
-            logger.debug("PulseDrive start")
+            logger.debug("PulseDrive stop (via fuel factor)")
             self.suit.play_pattern("SpaceshipPulse")
         elif fuel >= 1.0:
             self._pulse_fired = False
@@ -476,11 +512,24 @@ class NMSBhapticsMod(Mod):
     # ===================================================================
     # SPACESHIP — weapons
     #
-    # GetHeatFactor is called every frame while in a ship.
-    # We detect the rising edge (heat increases) and play one burst.
-    # A cooldown flag prevents re-triggering until heat settles back down,
-    # which avoids both the stuttering loop and the never-stops problem.
+    # GetCurrentShootPoints was tried as an additional trigger but ruled
+    # out by direct log evidence: it returned a non-null/truthy result on
+    # essentially every frame for the entire flight, regardless of
+    # whether the trigger was held — not tied to actual firing at all.
+    # Reverted to GetHeatFactor only, even though that one is known to be
+    # unreliable when shooting without hitting anything (the original
+    # complaint). Worth raising with monkeyman192: a dedicated "weapon
+    # fired" hook would be much more reliable than either of these.
     # ===================================================================
+
+    def _trigger_ship_weapon_burst(self, source: str):
+        now = time.perf_counter()
+        if now - self._ship_fire_last_trigger < SHIP_FIRE_DEBOUNCE:
+            logger.debug(f"ShipWeapons burst from {source} suppressed (debounce)")
+            return
+        self._ship_fire_last_trigger = now
+        logger.debug(f"ShipWeapons fired (source={source})")
+        self.suit.play_pattern("SpaceshipWeaponShoot")
 
     @nms.cGcSpaceshipWeapons.GetHeatFactor.after
     def on_ship_heat(self, this, _result_):
@@ -489,14 +538,8 @@ class NMSBhapticsMod(Mod):
         heat  = float(_result_)
         delta = heat - self._prev_heat
         self._prev_heat = heat
-
-        if delta > SHIP_WEAPON_HEAT_THRESHOLD and not self._ship_weapon_active:
-            self._ship_weapon_active = True
-            logger.debug("ShipWeapons fired")
-            self.suit.play_pattern("SpaceshipWeaponShoot")
-        elif heat < 0.01:
-            # Heat fully dissipated — ready to fire again
-            self._ship_weapon_active = False
+        if delta > SHIP_WEAPON_HEAT_THRESHOLD:
+            self._trigger_ship_weapon_burst("heat")
 
 
 # ---------------------------------------------------------------------------
