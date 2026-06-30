@@ -19,7 +19,9 @@
 No Man's Sky — bHaptics haptic suit mod  (NMS.py, no-polling edition)
 
 Strategy for every hook:
-  - No hooks on cGcPlayer.Update or cGcLocalPlayerCharacterInterface.IsJetpacking.
+  - cGcPlayer.Update is never hooked (too broad, too frequent). Other
+    frequent hooks (GetDominantHand, IsJetpacking) are fine in steady
+    state since they only act when their value actually changes.
   - cGcLaserBeam.Fire is still per-frame, but the hook body is three lines;
     a cGcPlayerWeapon.Update hook (narrower scope than cGcPlayer.Update)
     handles the off-edge only when the laser is believed active.
@@ -44,6 +46,7 @@ Haptic patterns used:
   GetOnSpaceship / GetOffSpaceship
   SpaceshipTakeOff / SpaceshipOnGround / SpaceshipBoost
   SpaceshipSpeedUp / SpaceshipPulse (looping) / SpaceshipWeaponShoot
+  PlayerUsingJetpack (looping)
 """
 
 import ctypes
@@ -117,6 +120,7 @@ class NMSBhapticsMod(Mod):
         # --- player state ---
         self.player_hand: int = 0
         self.is_in_spaceship: bool = False
+        self._jetpack_active: bool = False
 
         # laser
         self._laser_active: bool = False
@@ -202,6 +206,33 @@ class NMSBhapticsMod(Mod):
         if hand != self.player_hand:
             self.player_hand = hand
             logger.debug(f"DominantHand changed to {self.player_hand}")
+
+    # ===================================================================
+    # PLAYER — jetpack
+    #
+    # Previously removed entirely alongside cGcPlayer.Update, since
+    # IsJetpacking is only ever called from inside that function and
+    # cGcPlayer.Update was the main suspected performance offender at
+    # the time. cGcPlayer.Update is still never hooked — but IsJetpacking
+    # itself doesn't need it: hooking IsJetpacking.after intercepts calls
+    # the game already makes on its own, it doesn't add new ones. The
+    # GetDominantHand fix above (only act on state changes, even at
+    # 100+ calls/second) showed this pattern is cheap in steady state,
+    # so the same approach is used here instead of avoiding the hook.
+    # ===================================================================
+
+    @nms.cGcLocalPlayerCharacterInterface.IsJetpacking.after
+    def on_is_jetpacking(self, this, *args, _result_):
+        active = bool(_result_)
+        if active == self._jetpack_active:
+            return
+        self._jetpack_active = active
+        if active:
+            logger.debug("Jetpack ON")
+            self.timers.start_jetpack()
+        else:
+            logger.debug("Jetpack OFF")
+            self.timers.stop_jetpack()
 
     # ===================================================================
     # PLAYER — mining laser
