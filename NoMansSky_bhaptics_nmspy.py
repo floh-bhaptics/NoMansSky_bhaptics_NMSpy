@@ -39,7 +39,7 @@ Haptic patterns used:
   DamageFront / DamageBack / DamageLeft / DamageRight / DefaultDamage
   RightHandPistolShoot / LeftHandPistolShoot
   RightHandPistolLaserShoot / LeftHandPistolLaserShoot  (looping)
-  Scanning
+  Scanning (held-button scan, one-shot per hold) / ScanWave (audio pulse)
   CollectItem
   GetOnSpaceship / GetOffSpaceship
   SpaceshipTakeOff / SpaceshipOnGround / SpaceshipBoost
@@ -73,6 +73,7 @@ BHAPTICS_DEFAULT_PATTERNS = ""
 # ---------------------------------------------------------------------------
 SHIP_ACCEL_THRESHOLD_SQ    = 2500   # speed-sq delta to trigger SpaceshipSpeedUp
 LASER_BEAM_COOLDOWN        = 0.25   # seconds of no Fire call before beam is "off"
+SCAN_HOLD_COOLDOWN         = 0.30   # seconds of no progress call before a new scan-hold counts as fresh
 
 # ---------------------------------------------------------------------------
 # Audio event IDs (cTkAudioManager.Play / TkAudioID.muID)
@@ -120,6 +121,9 @@ class NMSBhapticsMod(Mod):
         # laser
         self._laser_active: bool = False
         self._laser_last_fire: float = 0.0
+
+        # scan (held button, distinct from the ScanWave audio pulse)
+        self._scan_last_progress: float = 0.0
 
         # ship
         self._last_land_state: int = -1
@@ -228,6 +232,27 @@ class NMSBhapticsMod(Mod):
                 self._laser_active = False
                 logger.debug("Laser OFF")
                 self.timers.stop_pistol_laser()
+
+    # ===================================================================
+    # PLAYER — scan (held button)
+    #
+    # This is a DIFFERENT mechanic from the ScanWave audio pulse below.
+    # UpdateScanBarProgress fires every frame for as long as the scan
+    # button is held — not a loop bug, that's genuinely how often it's
+    # called. The old _scan_active/UpdateRayCasts approach reset
+    # unreliably (UpdateRayCasts isn't a clean "scan ended" signal), so
+    # this uses the same time-based cooldown trick that works well for
+    # the laser: only fire once per "hold", determined by a gap since
+    # the last progress call rather than relying on an explicit end event.
+    # ===================================================================
+
+    @nms.cGcBinoculars.UpdateScanBarProgress.after
+    def on_scan_progress(self, this, lfScanProgress):
+        now = time.perf_counter()
+        if now - self._scan_last_progress > SCAN_HOLD_COOLDOWN:
+            logger.debug("Scan hold started")
+            self.suit.play_pattern("Scanning")
+        self._scan_last_progress = now
 
     # ===================================================================
     # WEAPON FIRE — cGcNetworkWeapon.FireRemote
@@ -481,7 +506,7 @@ class NMSBhapticsMod(Mod):
 
         if audio_id == AUDIO_ID_SCAN_WAVE:
             logger.debug("ScanWave (audio)")
-            self.suit.play_pattern("Scanning")
+            self.suit.play_pattern("ScanWave")
 
         elif audio_id == AUDIO_ID_START_SPACEJUMP:
             logger.debug("PulseDrive start (audio)")
