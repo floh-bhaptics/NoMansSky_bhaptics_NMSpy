@@ -83,7 +83,7 @@ class bhaptics_suit:
         dispatched into the persistent background event loop.
         """
         if not self.connected:
-            # Still connecting, or connection failed — drop silently.
+            logger.debug(f"play_pattern('{pattern_name}') dropped — not connected")
             return
         if not isinstance(pattern_name, str):
             logger.warning(f"play_pattern: pattern_name must be a str, got {type(pattern_name)}")
@@ -92,6 +92,10 @@ class bhaptics_suit:
             logger.warning(f"play_pattern: intensity {intensity} out of range 0–100")
             return
 
+        logger.debug(
+            f"play_pattern('{pattern_name}') from thread "
+            f"'{threading.current_thread().name}'"
+        )
         self._loop.call_soon_threadsafe(
             bhaptics_python.play_event, pattern_name.lower()
         )
@@ -112,9 +116,14 @@ class bhaptics_suit:
           Left   -> 270  (hit from the left, pattern on right side)
         """
         if not self.connected:
+            logger.debug(f"play_damage('{pattern_name}') dropped — not connected")
             return
         if not isinstance(pattern_name, str):
             return
+        logger.debug(
+            f"play_damage('{pattern_name}', rotation={rotation_deg:.0f}deg) from thread "
+            f"'{threading.current_thread().name}'"
+        )
         self._loop.call_soon_threadsafe(
             self._play_param_sync,
             pattern_name.lower(),
@@ -123,6 +132,7 @@ class bhaptics_suit:
 
     def _play_param_sync(self, pattern_name: str, rotation_deg: float):
         """Called on the event loop thread — calls play_param directly."""
+        logger.debug(f"bhaptics_python.play_param('{pattern_name}', rotation={rotation_deg:.0f}) calling SDK now")
         bhaptics_python.play_param(
             pattern_name,
             1.0,   # intensity multiplier (1.0 = normal)
@@ -177,19 +187,38 @@ class TimerController:
         e = self._effects[name]
         with e["lock"]:
             if e["running"]:
+                logger.debug(f"_start('{name}') skipped — already running")
                 return
             e["running"] = True
+
+        def _guarded_target():
+            logger.debug(f"{name} worker thread starting")
+            try:
+                target()
+            except Exception:
+                logger.exception(f"{name} worker crashed — stopping loop")
+            finally:
+                # Always clear the flag on exit, even on crash, so a dead
+                # thread never leaves start_<effect>() thinking a loop is
+                # still running when nothing is actually playing anymore.
+                with e["lock"]:
+                    e["running"] = False
+                logger.debug(f"{name} worker thread exiting")
+
         e["thread"] = threading.Thread(
-            target=target, daemon=True, name=f"{name}_timer"
+            target=_guarded_target, daemon=True, name=f"{name}_timer"
         )
         e["thread"].start()
+        logger.debug(f"_start('{name}') launched thread {e['thread'].name}")
 
     def _stop(self, name: str):
         e = self._effects[name]
         with e["lock"]:
             if not e["running"]:
+                logger.debug(f"_stop('{name}') skipped — not running")
                 return
             e["running"] = False
+        logger.debug(f"_stop('{name}') signalled, joining thread")
         if e["thread"]:
             e["thread"].join(timeout=1.0)
 

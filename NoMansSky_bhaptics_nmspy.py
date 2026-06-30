@@ -163,13 +163,27 @@ class NMSBhapticsMod(Mod):
         self.suit.play_damage("DefaultDamage", rotation)
 
     # ===================================================================
-    # PLAYER — dominant hand (called rarely)
+    # PLAYER — dominant hand
+    #
+    # The debug log showed this firing well over 100 times/second — not
+    # "rarely" as originally assumed. True hook removal at runtime would
+    # need direct access to pymhf's internal hook-disable API, which isn't
+    # part of the public NMS.py Mod interface and isn't something we can
+    # safely guess without testing against a live process — worth asking
+    # monkeyman192 about if this turns out to matter for performance.
+    #
+    # For now we cut the cost down as much as possible without that: only
+    # update state and log when the value actually changes (which should
+    # be never, or extremely rarely if a player changes hand preference
+    # mid-session), turning nearly every call into a single int comparison.
     # ===================================================================
 
     @nms.cGcPlayer.GetDominantHand.after
     def on_dominant_hand(self, this, *args, _result_):
-        self.player_hand = int(_result_)
-        logger.debug(f"DominantHand={self.player_hand}")
+        hand = int(_result_)
+        if hand != self.player_hand:
+            self.player_hand = hand
+            logger.debug(f"DominantHand changed to {self.player_hand}")
 
     # ===================================================================
     # PLAYER — mining laser
