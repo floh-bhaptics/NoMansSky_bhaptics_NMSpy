@@ -23,19 +23,27 @@ Strategy for every hook:
   - cGcLaserBeam.Fire is still per-frame, but the hook body is three lines;
     a cGcPlayerWeapon.Update hook (narrower scope than cGcPlayer.Update)
     handles the off-edge only when the laser is believed active.
-  - All spaceship hooks (Update, GetVelocity, GetHeatFactor, UpdatePulseDrive)
-    are acceptable because they only run while the player is piloting a ship.
+  - Weapon fire (multitool, all modes, AND spaceship) is caught by a single
+    cGcNetworkWeapon.FireRemote hook — a real fire event, not a heuristic.
+  - Scanning, pulse-drive start/stop, ship takeoff/landing are all driven
+    by discrete cTkAudioManager.Play audio cues rather than polling UI
+    update functions or struct fields — proven reliable in the original
+    pyMHF version of this mod.
+  - UpdatePulseDrive is never hooked — confirmed by direct testing to
+    break player movement, cause unknown.
+  - Remaining spaceship hooks (Update for boost, GetVelocity) are
+    acceptable because they only run while piloting a ship.
 
 Haptic patterns used:
   heartbeat / PlayerDeath / FallDamage
   DamageFront / DamageBack / DamageLeft / DamageRight / DefaultDamage
   RightHandPistolShoot / LeftHandPistolShoot
   RightHandPistolLaserShoot / LeftHandPistolLaserShoot  (looping)
-  Scanning  (looping)
+  Scanning
   CollectItem
   GetOnSpaceship / GetOffSpaceship
-  SpaceshipTakeOff / SpaceshipOnGround
-  SpaceshipSpeedUp / SpaceshipPulse (looping) / SpaceshipWeaponShoot (looping)
+  SpaceshipTakeOff / SpaceshipOnGround / SpaceshipBoost
+  SpaceshipSpeedUp / SpaceshipPulse (looping) / SpaceshipWeaponShoot
 """
 
 import ctypes
@@ -48,7 +56,6 @@ from pymhf import Mod
 from pymhf.core.hooking import function_hook, Structure
 
 import nmspy.data.types as nms
-import nmspy.data.enums as nmse
 
 from bhaptics_library import bhaptics_suit, TimerController
 
@@ -65,14 +72,28 @@ BHAPTICS_DEFAULT_PATTERNS = ""
 # Tunables
 # ---------------------------------------------------------------------------
 SHIP_ACCEL_THRESHOLD_SQ    = 2500   # speed-sq delta to trigger SpaceshipSpeedUp
-SHIP_WEAPON_HEAT_THRESHOLD = 0.02   # heat-factor rise per frame = "firing"
-SHIP_WEAPON_COOLDOWN       = 0.35   # seconds of no heat rise before loop stops
-SHIP_FIRE_DEBOUNCE         = 0.10   # min seconds between separate fire-burst haptics
 LASER_BEAM_COOLDOWN        = 0.25   # seconds of no Fire call before beam is "off"
-PLAYER_WEAPON_HEAT_THRESHOLD = 0.05  # mfHeatTime rise per Update tick = "shot fired" 
 
 # ---------------------------------------------------------------------------
-# cGcNetworkWeapon — not yet in NMS.py, define locally with raw byte pattern
+# Audio event IDs (cTkAudioManager.Play / TkAudioID.muID)
+#
+# These came from the original, proven-working pyMHF version of this mod —
+# discrete one-shot audio cues turn out to be far more reliable signals
+# than polling heat factors, fuel factors, or UI update functions.
+# ---------------------------------------------------------------------------
+AUDIO_ID_SCAN_WAVE        = 2149772978
+AUDIO_ID_SHIP_ON_GROUND   = 3903008093
+AUDIO_ID_SHIP_TAKEOFF     = 514090887
+AUDIO_ID_START_SPACEJUMP  = 1261594536
+AUDIO_ID_STOP_SPACEJUMP_1 = 1511168854
+AUDIO_ID_STOP_SPACEJUMP_2 = 2852869421
+
+# ---------------------------------------------------------------------------
+# cGcNetworkWeapon — not yet in NMS.py, define locally with raw byte pattern.
+# This single hook reliably catches weapon fire for ALL multitool modes
+# AND spaceship weapons — confirmed working in the original pyMHF version
+# of this mod, unlike the heat/shootpoint-based approaches tried earlier
+# today which both turned out to be unreliable proxies.
 # ---------------------------------------------------------------------------
 
 class cGcNetworkWeapon(Structure):
@@ -103,17 +124,6 @@ class NMSBhapticsMod(Mod):
         # ship
         self._last_land_state: int = -1
         self._prev_velocity_sq: float = 0.0
-        self._prev_heat: float = 0.0
-        self._heat_last_rise: float = 0.0
-        self._ship_fire_last_trigger: float = 0.0
-        self._pulse_fired: bool = False
-
-        # multitool projectile fire detection
-        self._prev_weapon_heat: float = 0.0
-        self._player_weapon_fired: bool = False
-
-        # scanner
-        self._scan_active: bool = False
 
         # world interactions
         self._last_interaction_event: int = -1
@@ -211,64 +221,46 @@ class NMSBhapticsMod(Mod):
 
     @nms.cGcPlayerWeapon.Update.after
     def on_weapon_update(self, this, lfTimeStep):
-        # --- laser off-edge detection ---
+        # --- laser off-edge detection only; projectile fire is handled
+        # by cGcNetworkWeapon.FireRemote below ---
         if self._laser_active:
             if time.perf_counter() - self._laser_last_fire > LASER_BEAM_COOLDOWN:
                 self._laser_active = False
                 logger.debug("Laser OFF")
                 self.timers.stop_pistol_laser()
 
-        # --- projectile / scatter / pulse weapon fire detection ---
-        # Skip while mining laser is active or when in spaceship.
-        if self._laser_active or self.is_in_spaceship or not this:
+    # ===================================================================
+    # WEAPON FIRE — cGcNetworkWeapon.FireRemote
+    #
+    # Catches the actual fire RPC for ALL multitool modes (boltcaster,
+    # scatter blaster, pulse splitter, etc.) and spaceship weapons in one
+    # place. Mining laser is excluded here since it's handled by the
+    # separate continuous cGcLaserBeam.Fire loop above.
+    # ===================================================================
+
+    @cGcNetworkWeapon.FireRemote.after
+    def on_fire_remote(self, this):
+        if self._laser_active:
             return
-        weapon = this.contents
-        heat = float(weapon.mfHeatTime)
-        delta = heat - self._prev_weapon_heat
-        self._prev_weapon_heat = heat
-        if delta > PLAYER_WEAPON_HEAT_THRESHOLD and not self._player_weapon_fired:
-            self._player_weapon_fired = True
-            if self.player_hand == 0:
-                logger.debug("RightHandPistolShoot")
-                self.suit.play_pattern("RightHandPistolShoot")
-            else:
-                logger.debug("LeftHandPistolShoot")
-                self.suit.play_pattern("LeftHandPistolShoot")
-        elif heat < 0.01:
-            self._player_weapon_fired = False
+        if self.is_in_spaceship:
+            logger.debug("SpaceshipWeaponShoot (FireRemote)")
+            self.suit.play_pattern("SpaceshipWeaponShoot")
+        elif self.player_hand == 0:
+            logger.debug("RightHandPistolShoot (FireRemote)")
+            self.suit.play_pattern("RightHandPistolShoot")
+        else:
+            logger.debug("LeftHandPistolShoot (FireRemote)")
+            self.suit.play_pattern("LeftHandPistolShoot")
 
     # ===================================================================
     # PLAYER — scanning
     #
-    # UpdateScanBarProgress is only called while the scan bar is moving,
-    # not on every global frame.  UpdateRayCasts fires when scan ends.
+    # Previously hooked UpdateScanBarProgress/UpdateRayCasts, which fired
+    # repeatedly throughout a scan (not just once), effectively behaving
+    # like an unwanted loop. Replaced with the ScanWave audio cue — a
+    # genuine one-shot signal for "scan activated", handled in the
+    # cTkAudioManager.Play dispatcher below.
     # ===================================================================
-
-    @nms.cGcBinoculars.UpdateScanBarProgress.after
-    def on_scan_progress(self, this, lfScanProgress):
-        # Play once when scan starts, not on every frame tick.
-        # UpdateScanBarProgress is called each frame while scanning, so we
-        # guard with a flag that resets when the scan ends.
-        if not self._scan_active:
-            self._scan_active = True
-            logger.debug("Scan started")
-            self.suit.play_pattern("Scanning")
-
-    @nms.cGcBinoculars.UpdateRayCasts.after
-    def on_scan_end(self, this, *args):
-        self._scan_active = False
-        logger.debug("Scan ended")
-
-    # ===================================================================
-    # PLAYER — multitool projectile weapons (all modes)
-    #
-    # cGcNetworkWeapon.FireRemote only matches boltcaster/laser.
-    # Instead we read mfHeatTime from cGcPlayerWeapon in its Update hook
-    # (which already runs for laser-off detection) — a heat spike above
-    # a threshold means a shot was just fired, regardless of weapon mode.
-    # We ignore this while the mining laser is active (handled separately).
-    # ===================================================================
-    # (projectile fire detection is integrated into on_weapon_update below)
 
     # ===================================================================
     # PLAYER — item collection
@@ -422,15 +414,17 @@ class NMSBhapticsMod(Mod):
         self.suit.play_pattern("GetOffSpaceship")
 
     # ===================================================================
-    # SPACESHIP — land state transitions (runs only while piloting)
+    # SPACESHIP — boost transition (runs only while piloting)
+    #
+    # Takeoff/landing and pulse-drive start/stop used to be detected here
+    # via meLandState polling, but have been replaced by the more
+    # reliable audio cues (cTkAudioManager.Play dispatcher below). Only
+    # the boost transition remains on this mechanism since no audio ID
+    # for it has been identified yet.
     # ===================================================================
 
-    _LANDED     = 3
-    _TAKING_OFF = 10
-
-    # cGcMissionConditionShipEngineStatus values we care about:
+    # cGcMissionConditionShipEngineStatus value for "Boosting":
     _SHIP_BOOSTING  = 4
-    _SHIP_PULSING   = 5
 
     @nms.cGcSpaceshipComponent.Update.after
     def on_ship_update(self, this: _Pointer[nms.cGcSpaceshipComponent], lfTimeStep):
@@ -443,27 +437,9 @@ class NMSBhapticsMod(Mod):
             return
         prev, self._last_land_state = self._last_land_state, state
 
-        if state == self._LANDED:
-            logger.debug("SpaceshipOnGround")
-            self.suit.play_pattern("SpaceshipOnGround")
-        elif state == self._TAKING_OFF and prev == self._LANDED:
-            logger.debug("SpaceshipTakeOff")
-            self.suit.play_pattern("SpaceshipTakeOff")
-        elif state == self._SHIP_BOOSTING and prev != self._SHIP_BOOSTING:
+        if state == self._SHIP_BOOSTING and prev != self._SHIP_BOOSTING:
             logger.debug("SpaceshipBoost")
             self.suit.play_pattern("SpaceshipBoost")
-        elif state == self._SHIP_PULSING and prev != self._SHIP_PULSING:
-            # This transition (Update.after, the same safe hook used for
-            # land state — NOT UpdatePulseDrive) appears to fire right as
-            # the pulse drive engages. Earlier we assumed "pulse jump" was
-            # a distinct mechanic from "pulse drive", but in NMS these are
-            # colloquially the same thing — reusing the SpaceshipPulse
-            # pattern here means it doubles as our "start" trigger,
-            # complementing the existing GetPulseDriveFuelFactor-based
-            # "stop" trigger below, with no risk of the movement-breaking
-            # issue UpdatePulseDrive caused.
-            logger.debug("PulseDrive start (via engine status)")
-            self.suit.play_pattern("SpaceshipPulse")
 
     # ===================================================================
     # SPACESHIP — acceleration (ship-scoped, runs only while piloting)
@@ -482,64 +458,46 @@ class NMSBhapticsMod(Mod):
             self.suit.play_pattern("SpaceshipSpeedUp")
 
     # ===================================================================
-    # SPACESHIP - pulse drive (stop trigger)
+    # AUDIO EVENTS — cTkAudioManager.Play
     #
-    # UpdatePulseDrive breaks player movement even on foot (confirmed by
-    # direct testing), so it is never hooked. GetPulseDriveFuelFactor is
-    # safe, but testing showed it fires once near the END of a pulse
-    # jump rather than the start (likely only called while the HUD fuel
-    # bar is being shown during recovery) — so this is kept as the STOP
-    # trigger. The START trigger lives in on_ship_update above, using the
-    # _SHIP_PULSING engine-status transition instead.
+    # Discrete one-shot audio cues, proven reliable in the original
+    # pyMHF version of this mod. This replaces three separate heuristic
+    # approaches tried earlier today (UpdatePulseDrive, which broke
+    # player movement; GetPulseDriveFuelFactor and meLandState-based
+    # engine-status polling, which both had start/stop timing issues).
     #
-    # Fuel sits at 1.0 at rest. The instant it drops below 0.99 we fire
-    # one haptic burst. The flag resets when fuel recovers to 1.0 so the
-    # next jump triggers again.
+    # Pulse drive now gets a PROPER continuous loop again: the SDK loop
+    # itself is fine, the problem before was always how we detected
+    # start/stop, never the loop mechanism. These two clean audio events
+    # give us an exact start/stop boundary to drive it correctly.
     # ===================================================================
 
-    @nms.cGcSpaceshipWarp.GetPulseDriveFuelFactor.after
-    def on_pulse_fuel(self, this, _result_):
-        if not self.is_in_spaceship:
+    @nms.cTkAudioManager.Play.after
+    def on_audio_play(self, this, event, object, _result_=None):
+        try:
+            audio_id = event.contents.muID
+        except Exception:
             return
-        fuel = float(_result_)
-        if fuel < 0.99 and not self._pulse_fired:
-            self._pulse_fired = True
-            logger.debug("PulseDrive stop (via fuel factor)")
-            self.suit.play_pattern("SpaceshipPulse")
-        elif fuel >= 1.0:
-            self._pulse_fired = False
 
-    # ===================================================================
-    # SPACESHIP — weapons
-    #
-    # GetCurrentShootPoints was tried as an additional trigger but ruled
-    # out by direct log evidence: it returned a non-null/truthy result on
-    # essentially every frame for the entire flight, regardless of
-    # whether the trigger was held — not tied to actual firing at all.
-    # Reverted to GetHeatFactor only, even though that one is known to be
-    # unreliable when shooting without hitting anything (the original
-    # complaint). Worth raising with monkeyman192: a dedicated "weapon
-    # fired" hook would be much more reliable than either of these.
-    # ===================================================================
+        if audio_id == AUDIO_ID_SCAN_WAVE:
+            logger.debug("ScanWave (audio)")
+            self.suit.play_pattern("Scanning")
 
-    def _trigger_ship_weapon_burst(self, source: str):
-        now = time.perf_counter()
-        if now - self._ship_fire_last_trigger < SHIP_FIRE_DEBOUNCE:
-            logger.debug(f"ShipWeapons burst from {source} suppressed (debounce)")
-            return
-        self._ship_fire_last_trigger = now
-        logger.debug(f"ShipWeapons fired (source={source})")
-        self.suit.play_pattern("SpaceshipWeaponShoot")
+        elif audio_id == AUDIO_ID_START_SPACEJUMP:
+            logger.debug("PulseDrive start (audio)")
+            self.timers.start_spacejump()
 
-    @nms.cGcSpaceshipWeapons.GetHeatFactor.after
-    def on_ship_heat(self, this, _result_):
-        if not self.is_in_spaceship:
-            return
-        heat  = float(_result_)
-        delta = heat - self._prev_heat
-        self._prev_heat = heat
-        if delta > SHIP_WEAPON_HEAT_THRESHOLD:
-            self._trigger_ship_weapon_burst("heat")
+        elif audio_id in (AUDIO_ID_STOP_SPACEJUMP_1, AUDIO_ID_STOP_SPACEJUMP_2):
+            logger.debug("PulseDrive stop (audio)")
+            self.timers.stop_spacejump()
+
+        elif audio_id == AUDIO_ID_SHIP_TAKEOFF:
+            logger.debug("SpaceshipTakeOff (audio)")
+            self.suit.play_pattern("SpaceshipTakeOff")
+
+        elif audio_id == AUDIO_ID_SHIP_ON_GROUND:
+            logger.debug("SpaceshipOnGround (audio)")
+            self.suit.play_pattern("SpaceshipOnGround")
 
 
 # ---------------------------------------------------------------------------
