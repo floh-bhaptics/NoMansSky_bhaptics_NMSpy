@@ -28,10 +28,10 @@ class bhaptics_suit:
     play_pattern() calls are silently dropped until self.connected is True.
     """
 
-    def __init__(self, app_id: str, api_key: str, app_name: str):
+    def __init__(self, app_id: str, api_key: str, default_pattern: str):
         self.app_id = app_id
         self.api_key = api_key
-        self.app_name = app_name
+        self.default_pattern = default_pattern
         self.connected = False
 
         # Create the event loop and start it on a daemon thread so it never
@@ -60,7 +60,7 @@ class bhaptics_suit:
         """Coroutine that initialises the SDK — runs on the background loop."""
         try:
             result = await bhaptics_python.registry_and_initialize(
-                self.app_id, self.api_key, self.app_name
+                self.app_id, self.api_key, self.default_pattern
             )
             if not result:
                 logger.error("Failed to initialize bHaptics SDK")

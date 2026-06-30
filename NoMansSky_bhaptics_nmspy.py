@@ -59,7 +59,7 @@ logger = logging.getLogger("NMS_bhaptics")
 # ---------------------------------------------------------------------------
 BHAPTICS_APP_ID   = "693ac4ffa277918a719a1bd8"
 BHAPTICS_API_KEY  = "uSEDPxsVOpRefEGM7FAc"
-BHAPTICS_APP_NAME = ""
+BHAPTICS_DEFAULT_PATTERNS = ""
 
 # ---------------------------------------------------------------------------
 # Tunables
@@ -121,7 +121,7 @@ class NMSBhapticsMod(Mod):
         self.suit = bhaptics_suit(
             app_id=BHAPTICS_APP_ID,
             api_key=BHAPTICS_API_KEY,
-            app_name=BHAPTICS_APP_NAME,
+            default_pattern=BHAPTICS_DEFAULT_PATTERNS,
         )
         self.timers = TimerController(self)
         logger.debug("bHaptics suit initialised (connecting in background…)")
