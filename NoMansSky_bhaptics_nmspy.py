@@ -74,7 +74,7 @@ BHAPTICS_DEFAULT_PATTERNS = ""
 # ---------------------------------------------------------------------------
 # Tunables
 # ---------------------------------------------------------------------------
-SHIP_ACCEL_THRESHOLD_SQ    = 2500   # speed-sq delta to trigger SpaceshipSpeedUp
+SHIP_ACCEL_THRESHOLD_SQ    = 1500   # speed-sq delta to trigger SpaceshipSpeedUp
 LASER_BEAM_COOLDOWN        = 0.25   # seconds of no Fire call before beam is "off"
 SCAN_HOLD_COOLDOWN         = 0.30   # seconds of no progress call before a new scan-hold counts as fresh
 INTERACTION_DEBOUNCE_RESET = 1.50   # seconds with no interaction event before debounce resets
