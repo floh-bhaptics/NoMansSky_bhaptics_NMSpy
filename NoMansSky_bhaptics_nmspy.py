@@ -45,7 +45,7 @@ Haptic patterns used:
   CollectItem
   GetOnSpaceship / GetOffSpaceship
   SpaceshipTakeOff / SpaceshipOnGround / SpaceshipBoost
-  SpaceshipSpeedUp / SpaceshipPulse (looping) / SpaceshipWeaponShoot
+  SpaceshipSpeedUp / EngagePulseDrive / DisengagePulseDrive / SpaceshipWeaponShoot
   PlayerUsingJetpack (looping)
 """
 
@@ -88,9 +88,8 @@ SCAN_HOLD_COOLDOWN         = 0.30   # seconds of no progress call before a new s
 AUDIO_ID_SCAN_WAVE        = 2149772978
 AUDIO_ID_SHIP_ON_GROUND   = 3903008093
 AUDIO_ID_SHIP_TAKEOFF     = 514090887
-AUDIO_ID_START_SPACEJUMP  = 1261594536
-AUDIO_ID_STOP_SPACEJUMP_1 = 1511168854
-AUDIO_ID_STOP_SPACEJUMP_2 = 2852869421
+AUDIO_ID_PULSE_ENGAGE    = 2773095001   # fires when charge completes and drive engages
+AUDIO_ID_PULSE_DISENGAGE = 1404352244   # fires when the drive is stopped/disengaged
 
 # ---------------------------------------------------------------------------
 # cGcNetworkWeapon — not yet in NMS.py, define locally with raw byte pattern.
@@ -470,13 +469,10 @@ class NMSBhapticsMod(Mod):
         self.suit.play_pattern("GetOffSpaceship")
 
     # ===================================================================
-    # SPACESHIP — boost transition (runs only while piloting)
+    # SPACESHIP — engine state transitions (runs only while piloting)
     #
-    # Takeoff/landing and pulse-drive start/stop used to be detected here
-    # via meLandState polling, but have been replaced by the more
-    # reliable audio cues (cTkAudioManager.Play dispatcher below). Only
-    # the boost transition remains on this mechanism since no audio ID
-    # for it has been identified yet.
+    # Boost: no reliable audio ID found yet, handled here via meLandState.
+    # Pulse drive engage/disengage: handled by audio cues in on_audio_play.
     # ===================================================================
 
     # cGcMissionConditionShipEngineStatus value for "Boosting":
@@ -494,7 +490,7 @@ class NMSBhapticsMod(Mod):
         prev, self._last_land_state = self._last_land_state, state
 
         if state == self._SHIP_BOOSTING and prev != self._SHIP_BOOSTING:
-            logger.debug("SpaceshipBoost")
+            logger.debug("SpaceshipBoost (engine state)")
             self.suit.play_pattern("SpaceshipBoost")
 
     # ===================================================================
@@ -509,8 +505,11 @@ class NMSBhapticsMod(Mod):
         sq    = v.x * v.x + v.y * v.y + v.z * v.z
         delta = sq - self._prev_velocity_sq
         self._prev_velocity_sq = sq
-        if delta > SHIP_ACCEL_THRESHOLD_SQ:
-            logger.debug("SpaceshipSpeedUp")
+        # The game emits a nonsense delta of ~1,000,000 when exiting pulse
+        # drive (appears to be an internal sentinel value, not real velocity).
+        # Clamp at 500,000 to ignore it while still catching real acceleration.
+        if SHIP_ACCEL_THRESHOLD_SQ < delta < 500000:
+            logger.debug(f"SpaceshipSpeedUp (delta={delta:.0f})")
             self.suit.play_pattern("SpaceshipSpeedUp")
 
     # ===================================================================
@@ -539,13 +538,15 @@ class NMSBhapticsMod(Mod):
             logger.debug("ScanWave (audio)")
             self.suit.play_pattern("ScanWave")
 
-        elif audio_id == AUDIO_ID_START_SPACEJUMP:
-            logger.debug("PulseDrive start (audio)")
-            self.timers.start_spacejump()
+        elif audio_id == AUDIO_ID_PULSE_ENGAGE:
+            # Fires when the charge completes and the pulse drive actually engages.
+            logger.debug("PulseDrive engaged (audio)")
+            self.suit.play_pattern("EngagePulseDrive")
 
-        elif audio_id in (AUDIO_ID_STOP_SPACEJUMP_1, AUDIO_ID_STOP_SPACEJUMP_2):
-            logger.debug("PulseDrive stop (audio)")
-            self.timers.stop_spacejump()
+        elif audio_id == AUDIO_ID_PULSE_DISENGAGE:
+            # Fires when the pulse drive is stopped/disengaged.
+            logger.debug("PulseDrive disengaged (audio)")
+            self.suit.play_pattern("DisengagePulseDrive")
 
         elif audio_id == AUDIO_ID_SHIP_TAKEOFF:
             logger.debug("SpaceshipTakeOff (audio)")
@@ -554,6 +555,13 @@ class NMSBhapticsMod(Mod):
         elif audio_id == AUDIO_ID_SHIP_ON_GROUND:
             logger.debug("SpaceshipOnGround (audio)")
             self.suit.play_pattern("SpaceshipOnGround")
+
+        elif self.is_in_spaceship:
+            # Log all unrecognised audio IDs while in the ship so we can
+            # identify the pulse-drive start cue (and any other useful ones)
+            # from the log. IDs outside the ship are silently ignored to
+            # avoid flooding the log with footstep/ambient sounds.
+            logger.debug(f"AudioPlay (in ship, unrecognised) id={audio_id}")
 
 
 # ---------------------------------------------------------------------------
