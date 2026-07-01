@@ -77,6 +77,7 @@ BHAPTICS_DEFAULT_PATTERNS = ""
 SHIP_ACCEL_THRESHOLD_SQ    = 2500   # speed-sq delta to trigger SpaceshipSpeedUp
 LASER_BEAM_COOLDOWN        = 0.25   # seconds of no Fire call before beam is "off"
 SCAN_HOLD_COOLDOWN         = 0.30   # seconds of no progress call before a new scan-hold counts as fresh
+INTERACTION_DEBOUNCE_RESET = 1.50   # seconds with no interaction event before debounce resets
 
 # ---------------------------------------------------------------------------
 # Audio event IDs (cTkAudioManager.Play / TkAudioID.muID)
@@ -134,6 +135,7 @@ class NMSBhapticsMod(Mod):
 
         # world interactions
         self._last_interaction_event: int = -1
+        self._last_interaction_time: float = 0.0
 
         # --- connect bHaptics ---
         # bhaptics_suit.__init__ starts a background thread and returns immediately
@@ -425,31 +427,53 @@ class NMSBhapticsMod(Mod):
         0x58: "InteractionTerminal",
     }
 
-    # NOTE: this currently fires while the player is merely gazing at an
-    # interactable, not specifically when they press the interact button.
-    # Our working theory (consistent with the values mapped above) is that
-    # leEvent reports the TYPE of whatever is under the crosshair, and the
-    # function gets called repeatedly while it stays in focus — not a
-    # distinct "gaze" vs "confirm" event code.
+    # NOTE: DoInteractionEvent fires when the crosshair focuses on an
+    # interactable AND when the player actually presses interact — there
+    # is no separate parameter to distinguish the two cases. leEvent maps
+    # to cGcInteractionType (what type of object it is), not a separate
+    # "event kind" enum. GiveReward (also hooked on this struct) would be
+    # a more specific "player actually completed an interaction" signal but
+    # only covers reward-giving interactions.
     #
-    # The debounce below stops the repeated buzz while continuously
-    # looking at the same object, firing once per newly-focused target.
-    # It does NOT yet distinguish "looking at" from "actually interacting".
-    #
-    # To look for a genuine "confirm pressed" signal: with debug logging
-    # on, gaze at a few different objects without pressing anything (note
-    # the ids logged), then walk up and actually press the interact
-    # button — if a NEW id appears that wasn't already tied to a specific
-    # object type, that may be the real confirm signal to filter for.
+    # Debounce: fires once per newly-focused target. Resets after
+    # INTERACTION_DEBOUNCE_RESET seconds with no event (player looked away),
+    # so the same target type can re-trigger next time it's focused.
     @nms.cGcInteractionComponent.DoInteractionEvent.after
     def on_interaction_event(self, this, leEvent):
-        event_id = int(leEvent)
+        # leEvent is typed as Annotated[int, c_uint32] but occasionally
+        # arrives as raw bytes — handle both safely.
+        try:
+            event_id = int(leEvent)
+        except (ValueError, TypeError):
+            try:
+                event_id = int.from_bytes(bytes(leEvent), 'little')
+            except Exception:
+                return
+
+        now = time.perf_counter()
+
+        # Reset debounce if enough time has passed (player looked away)
+        if now - self._last_interaction_time > INTERACTION_DEBOUNCE_RESET:
+            self._last_interaction_event = -1
+        self._last_interaction_time = now
+
         if event_id == self._last_interaction_event:
-            return  # still gazing at the same target — suppress repeat
+            return  # same target, suppress repeat
         self._last_interaction_event = event_id
+
         pattern = self._INTERACTION_PATTERNS.get(event_id, "InteractionEvent")
         logger.debug(f"InteractionEvent id={event_id} -> {pattern}")
         self.suit.play_pattern(pattern)
+
+    @nms.cGcInteractionComponent.GiveReward.after
+    def on_give_reward(self, this, lOption, lbPeek, lbForceShowMessage, lbForceSilent, _result_):
+        # lbPeek=True means the game is only previewing the reward (e.g.
+        # showing the UI tooltip), not actually granting it. Only trigger
+        # haptics when the reward is genuinely received.
+        if lbPeek:
+            return
+        logger.debug("ReceiveReward")
+        self.suit.play_pattern("ReceiveReward")
 
     # ===================================================================
     # SPACESHIP — cockpit entry / exit
