@@ -8,6 +8,9 @@
 # default_mod_save_dir = "."
 # internal_mod_dir = "."
 #
+# [tool.pymhf.gui]
+# shown = false
+#
 # [tool.pymhf.logging]
 # shown = false
 # log_dir = "."
