@@ -115,7 +115,7 @@ class cGcNetworkWeapon(Structure):
 class NMSBhapticsMod(Mod):
     __author__      = "floh-bhaptics"
     __description__ = "bHaptics haptic suit integration — no-polling edition"
-    __version__     = "2.1.0"
+    __version__     = "1.5.0"
 
     def __init__(self):
         super().__init__()
