@@ -166,6 +166,9 @@ class TimerController:
         self.jetpack_interval       = 0.15
         self.spacejump_interval     = 0.50
         self.ship_weapons_interval  = 0.12
+        # How long (seconds) without a cGcLaserBeam.Fire call before the pistol
+        # laser worker self-terminates. Kept here to avoid importing from the mod.
+        self.laser_beam_cooldown    = 0.25
 
         # Create a dict of locks / flags / threads so we don't repeat boilerplate
         self._effects = {}
@@ -218,9 +221,11 @@ class TimerController:
                 logger.debug(f"_stop('{name}') skipped — not running")
                 return
             e["running"] = False
-        logger.debug(f"_stop('{name}') signalled, joining thread")
-        if e["thread"]:
-            e["thread"].join(timeout=1.0)
+        # Do NOT join here — _stop() is called from game hook callbacks which
+        # may run on the main render thread. Blocking for up to 1 second on
+        # every loop stop causes dropped frames / stutters. Setting running=False
+        # is enough; the worker exits on its next loop iteration and is a daemon thread.
+        logger.debug(f"_stop('{name}') signalled")
 
     # ------------------------------------------------------------------
     # Expose running state as properties (used by the mod)
@@ -243,7 +248,17 @@ class TimerController:
     # ------------------------------------------------------------------
 
     def _pistol_laser_worker(self):
+        # Self-terminating: if _laser_last_fire goes stale (no cGcLaserBeam.Fire
+        # call for laser_beam_cooldown seconds), stop the loop ourselves and clear
+        # _laser_active. This makes the laser loop independent of
+        # cGcPlayerWeapon.Update, which may be silently disabled by a NMS update.
         while self._effects["pistol_laser"]["running"]:
+            if time.perf_counter() - self.mod._laser_last_fire > self.laser_beam_cooldown:
+                logger.debug("pistol_laser worker: fire timestamp stale, self-stopping")
+                self.mod._laser_active = False
+                with self._effects["pistol_laser"]["lock"]:
+                    self._effects["pistol_laser"]["running"] = False
+                break
             pattern = (
                 "righthandpistollasershoot"
                 if self.mod.player_hand == 0

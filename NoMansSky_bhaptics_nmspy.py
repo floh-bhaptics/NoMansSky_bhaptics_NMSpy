@@ -243,9 +243,10 @@ class NMSBhapticsMod(Mod):
     #
     # cGcLaserBeam.Fire is per-frame while the beam is active.
     # Hook body is minimal: just update a timestamp and start the loop once.
-    # cGcPlayerWeapon.Update (narrower than cGcPlayer.Update) detects the
-    # off-edge, but ONLY when we believe the laser is on — so it is
-    # essentially a no-op 99% of the time.
+    # The pistol_laser worker thread monitors _laser_last_fire and self-
+    # terminates when no Fire call has arrived for LASER_BEAM_COOLDOWN
+    # seconds — so the loop stops correctly even if cGcPlayerWeapon.Update
+    # is broken by a NMS update.
     # ===================================================================
 
     @nms.cGcLaserBeam.Fire.after
@@ -260,13 +261,11 @@ class NMSBhapticsMod(Mod):
 
     @nms.cGcPlayerWeapon.Update.after
     def on_weapon_update(self, this, lfTimeStep):
-        # --- laser off-edge detection only; projectile fire is handled
-        # by cGcNetworkWeapon.FireRemote below ---
-        if self._laser_active:
-            if time.perf_counter() - self._laser_last_fire > LASER_BEAM_COOLDOWN:
-                self._laser_active = False
-                logger.debug("Laser OFF")
-                self.timers.stop_pistol_laser()
+        # NOTE: laser off-edge detection has been moved into the pistol_laser
+        # worker thread itself (_pistol_laser_worker in bhaptics_library.py).
+        # The worker self-terminates when _laser_last_fire goes stale, so the
+        # laser loop stops correctly even if this hook is disabled by a NMS update.
+        pass
 
     # ===================================================================
     # PLAYER — scan (held button)
